@@ -75,6 +75,23 @@ describe("Authentication and server-side role boundaries", () => {
     },
   );
   it.each([
+    "SUPER_ADMIN",
+    "PLATFORM_ADMIN",
+    "ORGANIZATION_ADMIN",
+    "ORGANIZATION_MEMBER",
+    "FLORIST",
+    "GROWER",
+    "USER",
+  ])("authenticates %s sessions for the signed-in account only", async (role) => {
+    vi.mocked(User.findById).mockResolvedValue({ ...base, role } as never);
+    const response = await request(app)
+      .get("/api/auth/me")
+      .set("Cookie", cookie);
+    expect(response.status).toBe(200);
+    expect(response.body.user).toMatchObject({ id: base.publicId, role });
+    expect(response.body.user).not.toHaveProperty("_id");
+  });
+  it.each([
     "USER",
     "GROWER",
     "FLORIST",
@@ -115,6 +132,17 @@ describe("Authentication and server-side role boundaries", () => {
       (await request(app).get("/api/admin/overview").set("Cookie", cookie))
         .status,
     ).toBe(401);
+  });
+  it("rejects malformed authentication tokens before looking up a session", async () => {
+    const lookup = vi.spyOn(Session, "findOne");
+    expect(
+      (
+        await request(app)
+          .get("/api/auth/me")
+          .set("Cookie", "floraconnect_session=not-a-valid-token")
+      ).status,
+    ).toBe(401);
+    expect(lookup).not.toHaveBeenCalled();
   });
   it("prevents Platform Admins from reading users or assigning system staff", async () => {
     vi.mocked(User.findById).mockResolvedValue({
@@ -304,9 +332,17 @@ describe("Authentication and server-side role boundaries", () => {
       ).status,
     ).toBe(400);
   });
-  it("login returns only safe account fields, a CSRF token and an HttpOnly cookie", async () => {
+  it.each([
+    "SUPER_ADMIN",
+    "PLATFORM_ADMIN",
+    "ORGANIZATION_ADMIN",
+    "ORGANIZATION_MEMBER",
+    "FLORIST",
+    "GROWER",
+    "USER",
+  ])("allows %s login and returns safe session credentials", async (role) => {
     vi.spyOn(User, "findOne").mockReturnValue({
-      select: () => Promise.resolve({ ...base, passwordHash: hash }),
+      select: () => Promise.resolve({ ...base, role, passwordHash: hash }),
     } as never);
     vi.spyOn(Session, "create").mockResolvedValue({} as never);
     const response = await request(app)
@@ -314,7 +350,7 @@ describe("Authentication and server-side role boundaries", () => {
       .set("Origin", origin)
       .send({ email: base.email, password: "test-only-password-12" });
     expect(response.status).toBe(200);
-    expect(response.body.user.role).toBe("SUPER_ADMIN");
+    expect(response.body.user.role).toBe(role);
     expect(response.body.user.passwordHash).toBeUndefined();
     expect(response.body.csrfToken).toMatch(/^[a-f0-9]{64}$/);
     expect(String(response.headers["set-cookie"])).toMatch(/HttpOnly/);
